@@ -19,23 +19,32 @@ spec:
     spec:
       containers:
       - name: mongodb-container
-        image: 'registry.redhat.io/rhscl/mongodb-36-rhel7:latest'
+        image: 'docker.io/library/mongo:5.0'
         ports:
         - containerPort: 27017
           protocol: TCP
-        env:
-        - name: MONGODB_USER
-          value: mongo-user-1
-        - name: MONGODB_PASSWORD
-          value: mongo-user-password
-        - name: MONGODB_DATABASE
-          value: restify-database
-        - name: MONGODB_ADMIN_PASSWORD
-          value: moogo-admin-pass
+        readinessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        env: []
         volumeMounts:
         - name: mongodb-data
-          mountPath: /data/db"
+          mountPath: /data/db
         imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
       volumes:
       - name: mongodb-data
         persistentVolumeClaim:

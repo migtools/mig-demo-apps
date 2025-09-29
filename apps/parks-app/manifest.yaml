@@ -38,14 +38,14 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/ryanj/restify-mongodb-parks
+      uri: https://github.com/weshayutin/restify-mongodb-parks
       ref: master
   strategy:
     type: Source
     sourceStrategy:
       from:
         kind: DockerImage
-        name: 'registry.redhat.io/ubi8/nodejs-10:latest'
+        name: 'registry.redhat.io/ubi8/nodejs-20:latest'
   output:
     to:
       kind: ImageStreamTag
@@ -95,16 +95,32 @@ spec:
         ports:
         - containerPort: 8080
           protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
         env:
         - name: DATABASE_SERVICE_NAME
           value: mongodb
         - name: MONGODB_DATABASE
           value: restify-database
-        - name: MONGODB_PASSWORD
-          value: mongo-user-password
-        - name: MONGODB_USER
-          value: mongo-user-1
-        resources: {}
+        - name: MONGODB_DB_URL
+          value: mongodb://mongodb:27017
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
         volumeMounts:
         - name: "restify-volume-1"
           mountPath: "/run"
@@ -167,23 +183,32 @@ spec:
     spec:
       containers:
       - name: mongodb-container
-        image: 'registry.redhat.io/rhscl/mongodb-36-rhel7:latest'
+        image: 'docker.io/library/mongo:5.0'
         ports:
         - containerPort: 27017
           protocol: TCP
-        env:
-        - name: MONGODB_USER
-          value: mongo-user-1
-        - name: MONGODB_PASSWORD
-          value: mongo-user-password
-        - name: MONGODB_DATABASE
-          value: restify-database
-        - name: MONGODB_ADMIN_PASSWORD
-          value: moogo-admin-pass
+        readinessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        env: []
         volumeMounts:
         - name: mongodb-data
-          mountPath: /data/db"
+          mountPath: /data/db
         imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
       volumes:
       - name: mongodb-data
         persistentVolumeClaim:
@@ -204,7 +229,6 @@ spec:
     targetPort: 27017
   selector:
     name: mongodb
-  portalIP: ''
   type: ClusterIP
   sessionAffinity: None
 status:

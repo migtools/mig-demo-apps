@@ -20,14 +20,14 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/ryanj/restify-mongodb-parks
+      uri: https://github.com/weshayutin/restify-mongodb-parks
       ref: master
   strategy:
     type: Source
     sourceStrategy:
       from:
         kind: DockerImage
-        name: 'registry.redhat.io/ubi8/nodejs-10:latest'
+        name: 'registry.redhat.io/ubi8/nodejs-20:latest'
   output:
     to:
       kind: ImageStreamTag
