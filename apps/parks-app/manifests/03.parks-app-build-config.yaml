@@ -20,8 +20,9 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/weshayutin/restify-mongodb-parks
+      uri: https://github.com/konveyor/mig-demo-apps
       ref: master
+    contextDir: apps/parks-app/src
   strategy:
     type: Source
     sourceStrategy:

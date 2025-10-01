@@ -38,4 +38,16 @@ You may edit individual definitions for different app resources. To combine all 
 ./build.sh
 ```
 
+## Storage Components
+
+The application uses one PersistentVolumeClaim:
+
+- **`mongodb-data-claim`** (10Gi) - Stores MongoDB database data
+
+Velero backup/restore preserves the container image with all static files already built in, ensuring the web interface works correctly after restore.
+
+## Velero Backup/Restore
+
+For information about Velero backup and restore capabilities, see the [velero/README.md](velero/README.md) documentation.
+
 If you read everything carefully, here's a cookie for you 🍪

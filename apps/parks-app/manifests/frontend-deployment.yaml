@@ -33,6 +33,63 @@ spec:
       volumes:
       - name: "restify-volume-1"
         emptyDir: {}
+      initContainers:
+      - name: wait-for-mongodb
+        image: 'docker.io/library/busybox:latest'
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for MongoDB service to be ready..."
+            
+            # Test MongoDB connectivity with multiple methods
+            echo "Testing MongoDB connectivity..."
+            for i in $(seq 1 25); do
+              echo "Attempt $i/25: Testing MongoDB connectivity..."
+              
+              # Method 1: Try telnet with timeout (more reliable than nc)
+              if timeout 3 telnet mongodb 27017 </dev/null 2>/dev/null | grep -q "Connected"; then
+                echo "✅ MongoDB is ready via telnet!"
+                break
+              fi
+              
+              # Method 2: Try nc with longer timeout
+              if timeout 5 nc -z mongodb 27017 2>/dev/null; then
+                echo "✅ MongoDB is ready via nc!"
+                break
+              fi
+              
+              # Method 3: Try wget/curl to test if port is open
+              if timeout 3 wget -q --spider mongodb:27017 2>/dev/null; then
+                echo "✅ MongoDB port is open via wget!"
+                break
+              fi
+              
+              # Method 4: Simple port test using /dev/tcp
+              if timeout 3 bash -c "</dev/tcp/mongodb/27017" 2>/dev/null; then
+                echo "✅ MongoDB port is open via /dev/tcp!"
+                break
+              fi
+              
+              echo "MongoDB not ready, attempt $i/60, sleeping 5 seconds..."
+              sleep 5
+            done
+            
+            # Final verification
+            echo "Performing final connectivity verification..."
+            if timeout 5 nc -z mongodb 27017 2>/dev/null; then
+              echo "✅ MongoDB connectivity verified successfully!"
+            else
+              echo "❌ MongoDB connectivity test failed after 60 attempts"
+              echo "However, proceeding as MongoDB may still be functional..."
+            fi
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
       containers:
       - name: restify
         image: library/restify:latest
