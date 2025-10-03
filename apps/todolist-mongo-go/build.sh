@@ -1,10 +1,11 @@
 #!/bin/bash
 
-VERSION_TAG=test1
-REGISTRY=quay.io
+VERSION_TAG=latest
+REGISTRY=ttl.sh
 USER=migtools
 # Manifest name
-MANIFEST_NAME="quay.io/migtools/oadp-ci-todolist-mongo-go-1"
+MANIFEST_NAME="quay.io/migtools/oadp-ci-todolist-mongo-go-3"
+#MANIFEST_NAME="ttl.sh/oadp-ci-todolist-mongo-go-3"
 
 if [[ -z "${VERSION_TAG:+x}" ]]; then
     echo "Please set up VERSION_TAG variable"
@@ -36,7 +37,7 @@ BASE_IMAGE_NAME="${IMAGE}"
 # Create a multi-architecture manifest
 podman manifest create ${MANIFEST_NAME}:${VERSION_TAG}
 
-for arch in amd64 arm64; do
+for arch in arm64 amd64; do
     ARCH_FLAGS=("--arch" "${arch}")
     if [[ "$arch" = "arm64" ]]; then
         ARCH_FLAGS=("${ARCH_FLAGS[@]}" "--variant" "v8")
@@ -44,7 +45,7 @@ for arch in amd64 arm64; do
 
     echo "building: $BASE_IMAGE_NAME-$arch"
     podman build \
-      -t "$IMAGE_NAME-$arch" \
+      -t "$MANIFEST_NAME-$arch" \
       --manifest "${MANIFEST_NAME}:${VERSION_TAG}" \
       --arch $arch \
       -f Dockerfile
