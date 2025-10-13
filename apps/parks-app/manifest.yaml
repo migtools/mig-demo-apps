@@ -38,15 +38,15 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/weshayutin/mig-demo-apps
-      ref: parks_app_fix
+      uri: https://github.com/konveyor/mig-demo-apps
+      ref: master
     contextDir: apps/parks-app/src
   strategy:
     type: Source
     sourceStrategy:
       from:
         kind: DockerImage
-        name: 'registry.redhat.io/ubi8/nodejs-20:latest'
+        name: 'registry.redhat.io/ubi9/nodejs-20:latest'
   output:
     to:
       kind: ImageStreamTag
@@ -101,8 +101,8 @@ spec:
             
             # Test MongoDB connectivity with multiple methods
             echo "Testing MongoDB connectivity..."
-            for i in $(seq 1 60); do
-              echo "Attempt $i/60: Testing MongoDB connectivity..."
+            for i in $(seq 1 25); do
+              echo "Attempt $i/25: Testing MongoDB connectivity..."
               
               # Method 1: Try telnet with timeout (more reliable than nc)
               if timeout 3 telnet mongodb 27017 </dev/null 2>/dev/null | grep -q "Connected"; then

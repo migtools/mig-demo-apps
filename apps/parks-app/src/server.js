@@ -11,6 +11,7 @@ db.initDB('keepAlive').catch(err => {
 });
 
 app.use(restify.plugins.queryParser())
+app.use(restify.plugins.bodyParser())
 app.use(restify.plugins.fullResponse())
 
 // CORS handling for Restify v11
@@ -44,6 +45,23 @@ app.get('/parks', async (req, res) => {
 app.get('/status', (req, res, next) => {
   res.send({ status: 'ok' });
   next();
+});
+
+// Click tracking endpoints
+app.post('/clicks', async (req, res) => {
+  try {
+    await db.recordClick(req, res);
+  } catch (err) {
+    res.send(500, { error: err.message });
+  }
+});
+
+app.get('/clicks', async (req, res) => {
+  try {
+    await db.getClickCount(req, res);
+  } catch (err) {
+    res.send(500, { error: err.message });
+  }
 });
 
 app.get('/', (req, res, next) => {
