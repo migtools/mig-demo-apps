@@ -1,2 +1,4 @@
 todolist-mariadb-go
 app
+test_report/
+test/__pycache__/

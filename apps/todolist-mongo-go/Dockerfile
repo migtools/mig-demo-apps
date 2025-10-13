@@ -1,6 +1,6 @@
-FROM --platform=$BUILDPLATFORM quay.io/konveyor/builder:ubi9-latest AS build-env
-ARG BUILDPLATFORM
+ARG TARGETPLATFORM
 ARG TARGETARCH
+FROM --platform=$TARGETPLATFORM quay.io/konveyor/builder:ubi9-latest AS build-env
 
 RUN mkdir /build
 WORKDIR /build
@@ -11,7 +11,7 @@ RUN go mod download
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -v -a -installsuffix cgo -o app
 
-FROM scratch
+FROM --platform=$TARGETPLATFORM quay.io/konveyor/builder:ubi9-latest
 COPY --from=build-env /build/app /app
 COPY resources/ /resources/
 COPY index.html .

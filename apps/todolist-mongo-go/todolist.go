@@ -31,6 +31,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -63,22 +64,82 @@ type TodoItemModel struct {
 	Completed   bool
 }
 
+// ErrorResponse represents a standardized error response
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+	Code    int    `json:"code,omitempty"`
+}
+
+// SuccessResponse represents a standardized success response
+type SuccessResponse struct {
+	Success bool        `json:"success"`
+	Data    interface{} `json:"data,omitempty"`
+	Message string      `json:"message,omitempty"`
+}
+
+// writeErrorResponse writes a standardized error response
+func writeErrorResponse(w http.ResponseWriter, statusCode int, errorMsg string, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	
+	response := ErrorResponse{
+		Error:   errorMsg,
+		Message: message,
+		Code:    statusCode,
+	}
+	
+	json.NewEncoder(w).Encode(response)
+}
+
+// writeSuccessResponse writes a standardized success response
+func writeSuccessResponse(w http.ResponseWriter, data interface{}, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	response := SuccessResponse{
+		Success: true,
+		Data:    data,
+		Message: message,
+	}
+	
+	json.NewEncoder(w).Encode(response)
+}
+
+// panicRecoveryMiddleware recovers from panics and returns proper HTTP responses
+func panicRecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Errorf("Panic recovered: %v", err)
+				writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "An unexpected error occurred")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 func connectToMongo() *mongo.Client {
 	remote := connectToMongoRemote()
-	pingErr := remote.Ping(context.TODO(), nil)
-	if pingErr != nil {
-		log.Error("Failed to ping remoteMongoDB")
-	}
-	if pingErr != nil {
-		local := connectToMongoLocal()
-		if local == nil {
-			log.Fatal("Failed to connect to MongoDB")
-			return nil
+	if remote != nil {
+		pingErr := remote.Ping(context.TODO(), nil)
+		if pingErr != nil {
+			log.Error("Failed to ping remote MongoDB, trying local connection")
+			remote.Disconnect(context.TODO())
+		} else {
+			log.Info("Successfully connected to remote MongoDB")
+			db = remote
+			return db
 		}
-		db = local
-	} else {
-		db = remote
 	}
+	
+	local := connectToMongoLocal()
+	if local == nil {
+		log.Error("Failed to connect to both remote and local MongoDB")
+		return nil
+	}
+	
+	log.Info("Successfully connected to local MongoDB")
+	db = local
 	return db
 }
 
@@ -110,153 +171,237 @@ func connectToMongoRemote() *mongo.Client {
 
 func CreateItem(w http.ResponseWriter, r *http.Request) {
 	description := r.FormValue("description")
+	
+	// Validate input
+	if description == "" {
+		writeErrorResponse(w, http.StatusBadRequest, "Bad Request", "Description cannot be empty")
+		return
+	}
+	
 	log.WithFields(log.Fields{"description": description}).Info("Add new TodoItem. Saving to database.")
 	todo := &TodoItemModel{Description: description, Completed: false}
+	
 	result, err := tododb.InsertOne(context.TODO(), todo)
+	if err != nil {
+		log.Errorf("Failed to insert todo item: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "Failed to create todo item")
+		return
+	}
+	
 	id := result.InsertedID.(primitive.ObjectID)
 	todo.Id = id
-	log.Info("inserted document with ID %v\n", id.Hex())
-	if err != nil {
-		log.Fatal(err)
-	} else {
-		// result := make(map[string]string)
-		// result["Id"] = id
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(todo)
-	}
+	log.Infof("Inserted document with ID %v", id.Hex())
+	
+	// Return the original format for backward compatibility
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(todo)
 }
 
 func UpdateItem(w http.ResponseWriter, r *http.Request) {
 	// Get URL parameter from mux
 	vars := mux.Vars(r)
-	// id, _ := strconv.Atoi(vars["id"])
-	// id, _ := strconv.ParseInt(vars["id"], 10, 64)
-	// Test if the TodoItem exist in DB
 	id := vars["id"]
-	err := GetItemByID(id)
-	if err == false {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"updated": false, "error": "Record Not Found"}`)
-	} else {
-		completed, _ := strconv.ParseBool(r.FormValue("completed"))
-		log.WithFields(log.Fields{"_id": id, "Completed": completed}).Info("Updating TodoItem")
-		objID, err := primitive.ObjectIDFromHex(id)
-		if err != nil {
-			panic(err)
-		}
-		filter := bson.M{"_id": objID}
-		_, err = tododb.UpdateOne(
-			context.TODO(),
-			filter,
-			bson.D{
-				{"$set", bson.D{{"completed", completed}}},
-			},
-		)
-		if err != nil {
-			fmt.Print(err.Error())
-		}
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"updated": true}`)
+	
+	// Validate ObjectID format
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Bad Request", "Invalid ID format")
+		return
 	}
+	
+	// Test if the TodoItem exists in DB
+	exists := GetItemByID(id)
+	if !exists {
+		writeErrorResponse(w, http.StatusNotFound, "Not Found", "Todo item not found")
+		return
+	}
+	
+	// Parse completed status with proper error handling
+	completedStr := r.FormValue("completed")
+	completed, err := strconv.ParseBool(completedStr)
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Bad Request", "Invalid completed value. Must be true or false")
+		return
+	}
+	
+	log.WithFields(log.Fields{"_id": id, "Completed": completed}).Info("Updating TodoItem")
+	
+	filter := bson.M{"_id": objID}
+	updateResult, err := tododb.UpdateOne(
+		context.TODO(),
+		filter,
+		bson.D{
+			{"$set", bson.D{{"completed", completed}}},
+		},
+	)
+	
+	if err != nil {
+		log.Errorf("Failed to update todo item: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "Failed to update todo item")
+		return
+	}
+	
+	if updateResult.ModifiedCount == 0 {
+		writeErrorResponse(w, http.StatusNotFound, "Not Found", "Todo item not found or no changes made")
+		return
+	}
+	
+	// Return the original format for backward compatibility
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"updated": true}`)
 }
 
 func DeleteItem(w http.ResponseWriter, r *http.Request) {
 	// Get URL parameter from mux
 	vars := mux.Vars(r)
-	for k, v := range mux.Vars(r) {
-		log.Info("key=%v, value=%v", k, v)
-	}
-	// id, _ := strconv.Atoi(vars["id"])
 	id := vars["id"]
-	// log.Warn("FAK")
-	// log.Info(id)
-	// Test if the TodoItem exist in DB
-	err := GetItemByID(id)
-	if err == false {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"deleted": false, "error": "Record Not Found"}`)
-	} else {
-		log.WithFields(log.Fields{"_id": id}).Info("Deleting TodoItem")
-		objID, err := primitive.ObjectIDFromHex(id)
-		if err != nil {
-			panic(err)
-		}
-		filter := bson.M{"_id": objID}
-		opts := options.Delete().SetCollation(&options.Collation{
-			Locale:    "en_US",
-			Strength:  1,
-			CaseLevel: false,
-		})
-		res, err := tododb.DeleteOne(context.TODO(), filter, opts)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Info("deleted %v documents\n", res.DeletedCount)
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"deleted": true}`)
+	
+	// Validate ObjectID format
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Bad Request", "Invalid ID format")
+		return
 	}
+	
+	// Test if the TodoItem exists in DB
+	exists := GetItemByID(id)
+	if !exists {
+		writeErrorResponse(w, http.StatusNotFound, "Not Found", "Todo item not found")
+		return
+	}
+	
+	log.WithFields(log.Fields{"_id": id}).Info("Deleting TodoItem")
+	
+	filter := bson.M{"_id": objID}
+	opts := options.Delete().SetCollation(&options.Collation{
+		Locale:    "en_US",
+		Strength:  1,
+		CaseLevel: false,
+	})
+	
+	res, err := tododb.DeleteOne(context.TODO(), filter, opts)
+	if err != nil {
+		log.Errorf("Failed to delete todo item: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "Failed to delete todo item")
+		return
+	}
+	
+	if res.DeletedCount == 0 {
+		writeErrorResponse(w, http.StatusNotFound, "Not Found", "Todo item not found")
+		return
+	}
+	
+	log.Infof("Deleted %v documents", res.DeletedCount)
+	// Return the original format for backward compatibility
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"deleted": true}`)
 }
 
 func GetItemByID(Id string) bool {
 	objID, err := primitive.ObjectIDFromHex(Id)
 	if err != nil {
-		panic(err)
+		log.Errorf("Invalid ObjectID format: %v", err)
+		return false
 	}
+	
 	filter := bson.M{"_id": objID}
 	var result TodoItemModel
 	err = tododb.FindOne(context.TODO(), filter).Decode(&result)
 	if err != nil {
-		log.Error("ID NOT found")
+		if err == mongo.ErrNoDocuments {
+			log.Debugf("Todo item with ID %s not found", Id)
+		} else {
+			log.Errorf("Database error while finding todo item: %v", err)
+		}
 		return false
-	} else {
-		log.Infof("%+v\n", result)
-		return true
 	}
+	
+	log.Debugf("Found todo item: %+v", result)
+	return true
 }
 
 func GetCompletedItems(w http.ResponseWriter, r *http.Request) {
 	log.Info("Get completed TodoItems")
-	completedTodoItems := GetTodoItems(true)
+	completedTodoItems, err := GetTodoItems(true)
+	if err != nil {
+		log.Errorf("Failed to get completed todo items: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "Failed to retrieve completed todo items")
+		return
+	}
+	// Return the original format for backward compatibility
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(completedTodoItems)
 }
 
 func GetIncompleteItems(w http.ResponseWriter, r *http.Request) {
 	log.Info("Get Incomplete TodoItems")
-	IncompleteTodoItems := GetTodoItems(false)
+	incompleteTodoItems, err := GetTodoItems(false)
+	if err != nil {
+		log.Errorf("Failed to get incomplete todo items: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "Internal Server Error", "Failed to retrieve incomplete todo items")
+		return
+	}
+	// Return the original format for backward compatibility
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(IncompleteTodoItems)
+	json.NewEncoder(w).Encode(incompleteTodoItems)
 }
 
-func GetTodoItems(completed bool) interface{} {
+func GetTodoItems(completed bool) ([]*TodoItemModel, error) {
 	findOptions := options.Find()
 	findOptions.SetLimit(50)
 
 	var results []*TodoItemModel
 	filter := bson.M{"completed": completed}
-	//TodoItems := db.Where("completed = ?", completed).Find(&todos).Value
-	//return TodoItems
+	
 	cur, err := tododb.Find(context.TODO(), filter, findOptions)
 	if err != nil {
-		log.Fatal(err)
+		log.Errorf("Failed to query todo items: %v", err)
+		return nil, err
 	}
+	defer cur.Close(context.TODO())
 
 	// Iterate through the cursor
 	for cur.Next(context.TODO()) {
 		var elem TodoItemModel
 		err := cur.Decode(&elem)
 		if err != nil {
-			log.Fatal(err)
+			log.Errorf("Failed to decode todo item: %v", err)
+			return nil, err
 		}
 
 		results = append(results, &elem)
 	}
-	return results
-
+	
+	// Check for cursor errors
+	if err := cur.Err(); err != nil {
+		log.Errorf("Cursor error: %v", err)
+		return nil, err
+	}
+	
+	return results, nil
 }
 
 func Healthz(w http.ResponseWriter, r *http.Request) {
-	log.Info("API Health is OK")
+	log.Info("API Health check requested")
+	
+	// Check database connectivity
+	if db == nil {
+		writeErrorResponse(w, http.StatusServiceUnavailable, "Service Unavailable", "Database not connected")
+		return
+	}
+	
+	// Ping the database
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	err := db.Ping(ctx, nil)
+	if err != nil {
+		log.Errorf("Database health check failed: %v", err)
+		writeErrorResponse(w, http.StatusServiceUnavailable, "Service Unavailable", "Database connection failed")
+		return
+	}
+	
+	// Return the original format for backward compatibility
 	w.Header().Set("Content-Type", "application/json")
 	io.WriteString(w, `{"alive": true}`)
 }
@@ -274,7 +419,7 @@ func init() {
 	log.SetReportCaller(true)
 }
 
-func prepopulate(collection *mongo.Collection) {
+func prepopulate(collection *mongo.Collection) error {
 	log.Info("Prepopulate the db")
 	prepop := TodoItemModel{Description: "prepopulate the db", Completed: true}
 	donuts := TodoItemModel{Description: "time", Completed: false}
@@ -282,9 +427,11 @@ func prepopulate(collection *mongo.Collection) {
 
 	insertManyResult, err := collection.InsertMany(context.TODO(), both_prepop)
 	if err != nil {
-		log.Fatal(err)
+		log.Errorf("Failed to prepopulate database: %v", err)
+		return err
 	}
-	fmt.Println("Inserted multiple prepopulate documents: ", insertManyResult.InsertedIDs)
+	log.Infof("Inserted multiple prepopulate documents: %v", insertManyResult.InsertedIDs)
+	return nil
 }
 
 func GetLogFile(w http.ResponseWriter, r *http.Request) {
@@ -317,10 +464,13 @@ func main() {
 
 	// Connect to MongoDB
 	db = connectToMongo()
+	if db == nil {
+		log.Fatal("Failed to connect to MongoDB - application cannot start")
+	}
 
 	// collection
 	tododb = db.Database("todolist").Collection("TodoItemModel")
-	fmt.Println("Connected to MongoDB!")
+	log.Info("Connected to MongoDB!")
 
 	fs := http.FileServer(http.Dir("./resources/"))
 
@@ -337,9 +487,16 @@ func main() {
 	router.HandleFunc("/todo/{id}", UpdateItem).Methods("POST")
 	router.HandleFunc("/todo/{id}", DeleteItem).Methods("DELETE")
 
-	handler := cors.New(cors.Options{
+	// Apply panic recovery middleware
+	handler := panicRecoveryMiddleware(router)
+	
+	// Apply CORS
+	corsHandler := cors.New(cors.Options{
 		AllowedMethods: []string{"GET", "POST", "DELETE", "PATCH", "OPTIONS"},
-	}).Handler(router)
+	}).Handler(handler)
 
-	http.ListenAndServe(":8000", handler)
+	log.Info("Server starting on port 8000")
+	if err := http.ListenAndServe(":8000", corsHandler); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
 }

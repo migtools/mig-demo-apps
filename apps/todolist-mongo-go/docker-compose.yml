@@ -15,15 +15,19 @@ services:
     volumes:
         - ./mongo-init:/docker-entrypoint-initdb.d/:ro
 
-  mongo-express:
-    image: mongo-express
-    restart: always
-    ports:
-      - 8081:8081
+  compass:
+    image: haohanyang/compass-web
+    container_name: compass-web-dev-compass
     environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: changeme
-      ME_CONFIG_MONGODB_ADMINPASSWORD: changeme
-      ME_CONFIG_MONGODB_URL: mongodb://changeme:changeme@mongo:27017/
+      - CW_MONGO_URI=mongodb://changeme:changeme@mongo:27017/todolist?authSource=admin
+      - CW_BASIC_AUTH_USERNAME=changeme
+      - CW_BASIC_AUTH_PASSWORD=changeme
+    depends_on:
+      - mongo
+    ports:
+      - 8080:8080
+    links:
+      - mongo
 
   todolist:
     build:
