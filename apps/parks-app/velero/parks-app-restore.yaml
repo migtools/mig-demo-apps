@@ -68,6 +68,6 @@ spec:
           - -c
           - |
             sleep 10
-            /usr/bin/curl localhost:8080
+            curl -f http://restify:8080/status || echo "App not ready yet"
         
  

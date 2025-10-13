@@ -145,9 +145,49 @@ async function select_all(req, res, next){
   }
 };
 
+// Click tracking functions
+async function record_click(req, res, next){
+  try {
+    const database = await ensureConnection();
+    const clicksCollection = database.collection('clicks');
+    
+    const clickData = {
+      timestamp: new Date(),
+      userAgent: req.headers['user-agent'] || 'unknown',
+      ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown'
+    };
+    
+    await clicksCollection.insertOne(clickData);
+    
+    // Get total click count
+    const totalClicks = await clicksCollection.countDocuments();
+    
+    res.send({ success: true, totalClicks: totalClicks });
+    return { success: true, totalClicks: totalClicks };
+  } catch(err) {
+    res.send(500, {http_status:500, error_msg: err.message});
+    return console.error('error recording click', err);
+  }
+};
+
+async function get_click_count(req, res, next){
+  try {
+    const database = await ensureConnection();
+    const clicksCollection = database.collection('clicks');
+    const totalClicks = await clicksCollection.countDocuments();
+    res.send({ totalClicks: totalClicks });
+    return { totalClicks: totalClicks };
+  } catch(err) {
+    res.send(500, {http_status:500, error_msg: err.message});
+    return console.error('error getting click count', err);
+  }
+};
+
 module.exports = exports = {
   selectAll: select_all,
   selectBox: select_box,
   flushDB:   flush_db,
-  initDB:    init_db
+  initDB:    init_db,
+  recordClick: record_click,
+  getClickCount: get_click_count
 };

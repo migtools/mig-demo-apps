@@ -22,8 +22,8 @@ spec:
   #- imagestreamtags.image.openshift.io
   
   # Include persistent volumes
-  #storageLocation: minio
-  storageLocation: guardian-minio
+  storageLocation: dpa-sample-1
+  #storageLocation: guardian-minio
   
   # Retain backup for 30 days
   ttl: 720h0m0s

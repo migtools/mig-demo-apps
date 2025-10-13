@@ -28,7 +28,7 @@ spec:
     sourceStrategy:
       from:
         kind: DockerImage
-        name: 'registry.redhat.io/ubi8/nodejs-20:latest'
+        name: 'registry.redhat.io/ubi9/nodejs-20:latest'
   output:
     to:
       kind: ImageStreamTag

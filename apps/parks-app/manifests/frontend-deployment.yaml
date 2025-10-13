@@ -35,61 +35,86 @@ spec:
         emptyDir: {}
       initContainers:
       - name: wait-for-mongodb
-        image: 'docker.io/library/busybox:latest'
+        image: 'docker.io/library/mongo:7.0'
         command:
-        - /bin/sh
+        - /bin/bash
         - -c
         - |
+          set +e  # Don't exit on error
+          
+          echo "==========================================="
           echo "Waiting for MongoDB service to be ready..."
+          echo "==========================================="
+          
+          MAX_ATTEMPTS=60
+          SLEEP_TIME=5
+          SUCCESS=0
+          
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo ""
+            echo "Attempt $i/$MAX_ATTEMPTS: Testing MongoDB connectivity..."
             
-            # Test MongoDB connectivity with multiple methods
-            echo "Testing MongoDB connectivity..."
-            for i in $(seq 1 25); do
-              echo "Attempt $i/25: Testing MongoDB connectivity..."
-              
-              # Method 1: Try telnet with timeout (more reliable than nc)
-              if timeout 3 telnet mongodb 27017 </dev/null 2>/dev/null | grep -q "Connected"; then
-                echo "✅ MongoDB is ready via telnet!"
+            # Method 1: Test with mongosh (most reliable - actual MongoDB protocol test)
+            if command -v mongosh >/dev/null 2>&1; then
+              echo "  → Testing with mongosh..."
+              if timeout 10 mongosh --host mongodb --port 27017 --eval "db.adminCommand('ping')" >/dev/null 2>&1; then
+                echo "  ✅ MongoDB is ready and responding to commands!"
+                SUCCESS=1
                 break
               fi
-              
-              # Method 2: Try nc with longer timeout
-              if timeout 5 nc -z mongodb 27017 2>/dev/null; then
-                echo "✅ MongoDB is ready via nc!"
-                break
-              fi
-              
-              # Method 3: Try wget/curl to test if port is open
-              if timeout 3 wget -q --spider mongodb:27017 2>/dev/null; then
-                echo "✅ MongoDB port is open via wget!"
-                break
-              fi
-              
-              # Method 4: Simple port test using /dev/tcp
-              if timeout 3 bash -c "</dev/tcp/mongodb/27017" 2>/dev/null; then
-                echo "✅ MongoDB port is open via /dev/tcp!"
-                break
-              fi
-              
-              echo "MongoDB not ready, attempt $i/60, sleeping 5 seconds..."
-              sleep 5
-            done
-            
-            # Final verification
-            echo "Performing final connectivity verification..."
-            if timeout 5 nc -z mongodb 27017 2>/dev/null; then
-              echo "✅ MongoDB connectivity verified successfully!"
-            else
-              echo "❌ MongoDB connectivity test failed after 60 attempts"
-              echo "However, proceeding as MongoDB may still be functional..."
             fi
+            
+            # Method 2: Test with legacy mongo client
+            if command -v mongo >/dev/null 2>&1; then
+              echo "  → Testing with mongo client..."
+              if timeout 10 mongo --host mongodb --port 27017 --eval "db.adminCommand('ping')" >/dev/null 2>&1; then
+                echo "  ✅ MongoDB is ready and responding to commands!"
+                SUCCESS=1
+                break
+              fi
+            fi
+            
+            # Method 3: Simple port connectivity test as fallback
+            echo "  → Testing port connectivity..."
+            if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/mongodb/27017' 2>/dev/null; then
+              echo "  ✅ MongoDB port 27017 is open and accepting connections!"
+              SUCCESS=1
+              break
+            fi
+            
+            # Method 4: Try nc if available
+            if command -v nc >/dev/null 2>&1; then
+              echo "  → Testing with nc..."
+              if timeout 5 nc -z mongodb 27017 2>/dev/null; then
+                echo "  ✅ MongoDB port is reachable via nc!"
+                SUCCESS=1
+                break
+              fi
+            fi
+            
+            echo "  ⏳ MongoDB not ready yet, waiting ${SLEEP_TIME} seconds..."
+            sleep $SLEEP_TIME
+          done
+          
+          echo ""
+          echo "==========================================="
+          if [ $SUCCESS -eq 1 ]; then
+            echo "✅ SUCCESS: MongoDB is ready!"
+            echo "==========================================="
+            exit 0
+          else
+            echo "⚠️  WARNING: Could not verify MongoDB after $MAX_ATTEMPTS attempts"
+            echo "Proceeding anyway - application will retry connections..."
+            echo "==========================================="
+            exit 0  # Don't fail the pod, let the app handle retries
+          fi
         resources:
           requests:
-            memory: "32Mi"
-            cpu: "50m"
-          limits:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
       containers:
       - name: restify
         image: library/restify:latest
