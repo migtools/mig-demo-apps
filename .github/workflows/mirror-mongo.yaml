@@ -14,20 +14,35 @@ jobs:
       matrix:
         tag:
           - "7.0"
+          - "7.0.28"
           # Add more tags here as needed, e.g.:
           # - "6.0"
           # - "latest"
       fail-fast: false
 
     steps:
-      - name: Install skopeo
+      - name: Install skopeo and jq
         run: |
           sudo apt-get update
-          sudo apt-get install -y skopeo
+          sudo apt-get install -y skopeo jq
 
       - name: Mirror mongo:${{ matrix.tag }} to quay.io
         run: |
+          # Create temp directory
+          tmp=$(mktemp -d)
+
+          # Copy to local dir first
+          skopeo copy --all docker://docker.io/library/mongo:${{ matrix.tag }} dir:$tmp
+
+          # Remove attestation entries from manifest (workaround for skopeo issue #2039)
+          jq 'del(.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest"))' \
+            "$tmp/manifest.json" > "$tmp/manifest.json.filtered"
+          mv "$tmp/manifest.json.filtered" "$tmp/manifest.json"
+
+          # Copy to destination with v2s2 format
           skopeo copy --all --format v2s2 \
             --dest-creds "${{ secrets.QUAY_USERNAME }}:${{ secrets.QUAY_PASSWORD }}" \
-            docker://docker.io/library/mongo:${{ matrix.tag }} \
-            docker://quay.io/migtools/mongo:${{ matrix.tag }}
+            dir:$tmp docker://quay.io/migtools/mongo:${{ matrix.tag }}
+
+          # Cleanup
+          rm -rf "$tmp"
