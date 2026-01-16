@@ -1,0 +1,33 @@
+name: Mirror Nginx Images
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tag:
+          - "latest"
+      fail-fast: false
+
+    steps:
+      - name: Install skopeo and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
+
+      - name: Mirror nginx:${{ matrix.tag }} to quay.io
+        run: |
+          tmp=$(mktemp -d)
+          skopeo copy --all docker://docker.io/bitnamisecure/nginx:${{ matrix.tag }} dir:$tmp
+          jq 'del(.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest"))' \
+            "$tmp/manifest.json" > "$tmp/manifest.json.filtered"
+          mv "$tmp/manifest.json.filtered" "$tmp/manifest.json"
+          skopeo copy --all --format v2s2 \
+            --dest-creds "${{ secrets.QUAY_USERNAME }}:${{ secrets.QUAY_PASSWORD }}" \
+            dir:$tmp docker://quay.io/migtools/nginx:${{ matrix.tag }}
+          rm -rf "$tmp"
