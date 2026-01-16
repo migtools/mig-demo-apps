@@ -1,0 +1,33 @@
+name: Mirror MongoDB Images
+
+on:
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tag:
+          - "7.0"
+          # Add more tags here as needed, e.g.:
+          # - "6.0"
+          # - "latest"
+      fail-fast: false
+
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Mirror mongo:${{ matrix.tag }} to quay.io
+        run: |
+          skopeo copy \
+            --dest-creds "${{ secrets.QUAY_USERNAME }}:${{ secrets.QUAY_PASSWORD }}" \
+            docker://docker.io/library/mongo:${{ matrix.tag }} \
+            docker://quay.io/migtools/mongo:${{ matrix.tag }}
