@@ -1,50 +1,135 @@
-# New sample app for OADP for MongoDB
+# Todolist MongoDB Go — Single Container (UBI 9)
 
-* I'll note most of this was lifted from:
-https://github.com/sdil/learning/blob/master/go/todolist-mysql-go/todolist.go
+A Go-based todolist application with a MongoDB backend, packaged into a
+**single UBI-9 container**. Both `mongod` and the Go web application run
+inside the same container, eliminating race conditions between separate
+database and application pods.
 
-
-## Local Setup
-
-* Get mongo running
+## Architecture
 
 ```
+┌──────────────────────────────────────┐
+│  Container (UBI 9 + MongoDB 7.0)     │
+│                                      │
+│  entrypoint.sh                       │
+│    ├─ mongod --auth (background)     │
+│    └─ todolist Go app (foreground)   │
+│                                      │
+│  mongod listens on 127.0.0.1:27017   │
+│  Go app  listens on 0.0.0.0:8000    │
+│                                      │
+│  PVC mounted at /data/db             │
+└──────────────────────────────────────┘
+```
+
+## Local Development
+
+Build and run everything with docker-compose:
+
+```bash
 docker-compose up -d --build
 ```
 
-* Get the app running
+The app will be available at http://localhost:8000
 
-```
-go mod tidy
-```
-* Update the db for a local connection:
-HERE: https://github.com/weshayutin/todolist-mongo-go/blob/master/todolist.go#L44-L48
+To stop:
 
-
-Execute:
-```
-go run todolist.go
+```bash
+docker-compose down
 ```
 
-Build:
-build multi-arch images w/ build.sh
+Data persists in a named volume (`mongodata`). To wipe and start fresh:
 
-Test:
-see the test directory
+```bash
+docker-compose down -v
+```
 
-OpenShift Templates:
-See: https://github.com/openshift/oadp-operator/tree/master/tests/e2e/sample-applications/mongo-persistent
+## Building Container Images
 
+### Using podman (multi-arch):
 
+```bash
+./build.sh        # build locally
+./build.sh -p     # build and push to quay.io
+```
 
-DB:
-Show items in the db:  http://localhost:8081/db/todolist/
+### Using docker buildx:
 
-![gnome-shell-screenshot-83uili](https://user-images.githubusercontent.com/138787/164760526-0585899c-b5f8-41a2-91c8-ea78e740e670.png)
+```bash
+make manifest-buildx
+```
 
+### Using podman manifest:
 
-![gnome-shell-screenshot-6ycmy9](https://user-images.githubusercontent.com/138787/164760586-72b7b0b9-47f1-4510-8308-b363f10ca8a6.png)
+```bash
+make manifest-docker
+```
 
-## Notes:
-* https://redhat-scholars.github.io/openshift-starter-guides/rhs-openshift-starter-guides/4.7/nationalparks-java-codechanges-github.html#webhooks_with_openshift
-*
+Override the registry/image/version:
+
+```bash
+make manifest-buildx REGISTRY=quay.io/myuser IMAGE=todolist-mongo VERSION=v2
+```
+
+## OpenShift Deployment
+
+### Standard (filesystem PVC):
+
+```bash
+oc apply -f OPENSHIFT/mongo-persistent.yaml
+```
+
+### CSI storage:
+
+```bash
+oc apply -f OPENSHIFT/mongo-persistent-csi.yaml -f OPENSHIFT/pvc/aws.yaml
+```
+
+### Block storage:
+
+```bash
+oc apply -f OPENSHIFT/mongo-persistent-block.yaml -f OPENSHIFT/pvc/aws-block-mode.yaml
+```
+
+## Testing
+
+See the `test/` directory for the test suite:
+
+```bash
+cd test
+pip install -r requirements.txt
+python run_tests.py --url http://localhost:8000
+```
+
+Or use the quick curl-based smoke tests:
+
+```bash
+bash test/curl_tests.sh
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `MONGO_INITDB_ROOT_USERNAME` | `changeme` | MongoDB admin username |
+| `MONGO_INITDB_ROOT_PASSWORD` | `changeme` | MongoDB admin password |
+| `MONGO_INITDB_DATABASE` | `todolist` | Database name |
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/` | Web UI |
+| GET | `/healthz` | Health check (pings MongoDB) |
+| GET | `/todo-completed` | List completed items |
+| GET | `/todo-incomplete` | List incomplete items |
+| POST | `/todo` | Create item (`description` form field) |
+| POST | `/todo/{id}` | Update item (`completed` form field) |
+| DELETE | `/todo/{id}` | Delete item |
+| GET | `/log` | Application log file |
+
+## Notes
+
+* Originally based on https://github.com/sdil/learning/blob/master/go/todolist-mysql-go/todolist.go
+* OADP (OpenShift API for Data Protection) demo application
+* Velero backup hooks (fsyncLock/fsyncUnlock) are configured in the OpenShift manifests
