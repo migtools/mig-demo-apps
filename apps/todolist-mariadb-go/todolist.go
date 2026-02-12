@@ -30,6 +30,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
@@ -43,31 +44,28 @@ import (
 
 var db *gorm.DB
 
-// wrapper for db connection
+// connectToDB attempts to connect to the local MariaDB instance with retries.
+// Both MariaDB and the Go app run in the same container, so we always connect
+// to 127.0.0.1:3306. Credentials match the MYSQL_USER/MYSQL_PASSWORD env vars
+// set in the Kubernetes manifests and used by the rhel9/mariadb-1011 image.
 func connectToDB() {
-	if db, _ = connectToMariaDBRemote(); db == nil {
-		db, _ = connectToMariaDBLocal()
+	var err error
+	for i := 0; i < 30; i++ {
+		db, err = connectToMariaDBLocal()
+		if err == nil {
+			log.Info("Successfully connected to MariaDB")
+			return
+		}
+		log.Warnf("Connection attempt %d/30 failed, retrying in 2s...", i+1)
+		time.Sleep(2 * time.Second)
 	}
+	log.Fatal("Failed to connect to MariaDB after 30 attempts")
 }
 
-// connect to mariadb at 127.0.0.1
+// connect to mariadb at 127.0.0.1 (local, same container)
 func connectToMariaDBLocal() (*gorm.DB, error) {
-	log.Info("Attempting to connect to: test:test@tcp(127.0.0.1:3306)/todolist")
-	dsn := "test:test@tcp(127.0.0.1:3306)/todolist?charset=utf8mb4&parseTime=True&loc=Local"
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Errorf("Connection failed: %v", err)
-		return nil, err
-	}
-
-	return db, nil
-}
-
-// connect to mariadb at mysql address defined in docker
-func connectToMariaDBRemote() (*gorm.DB, error) {
-	log.Info("Attempting to connect to: changeme:changeme@tcp(mysql:3306)/todolist")
-	// the user and passwd defined here match the templates in mysql-persistent.yaml.  Change as needed
-	dsn := "changeme:changeme@tcp(mysql:3306)/todolist?charset=utf8mb4&parseTime=True&loc=Local"
+	log.Info("Attempting to connect to: changeme:changeme@tcp(127.0.0.1:3306)/todolist")
+	dsn := "changeme:changeme@tcp(127.0.0.1:3306)/todolist?charset=utf8mb4&parseTime=True&loc=Local"
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Errorf("Connection failed: %v", err)
