@@ -1,27 +1,24 @@
-#FROM registry.access.redhat.com/ubi8/ubi-minimal
-FROM golang:1.22.0-alpine AS build-env
-RUN mkdir /build
+# Stage 1: Build Go binary
+FROM golang:1.24-alpine AS build-env
 WORKDIR /build
-COPY *.go .
-COPY go.mod .
-COPY go.sum .
-RUN go mod download
-RUN go mod tidy
+COPY *.go go.mod go.sum ./
+RUN go mod download && go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -v -a -installsuffix cgo -o app
-#RUN go build -o /app
-# dev
-#WORKDIR /go/src/github.com/weshayutin/todolist-mariadb-go
-#
-#COPY ./ .
-#
-#RUN chmod -R 777 ./
-#RUN go mod download
 
-FROM scratch
-COPY --from=build-env /build/app /app
-COPY resources/ /resources/
-COPY index.html .
+# Stage 2: Combined MariaDB + todolist container
+# rhel9/mariadb-1011 is built on UBI-9 and has MariaDB 10.11 pre-installed.
+# It handles DB initialization automatically via env vars:
+#   MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD, MYSQL_DATABASE
+FROM registry.redhat.io/rhel9/mariadb-1011
+
+USER root
+
+# Copy Go binary and web assets
+COPY --from=build-env /build/app /opt/todolist/app
+COPY resources/ /opt/todolist/resources/
+COPY index.html /opt/todolist/
+COPY scripts/entrypoint.sh /opt/todolist/entrypoint.sh
+RUN chmod +x /opt/todolist/entrypoint.sh
+
 EXPOSE 8000
-# use entrypoint for debug
-#ENTRYPOINT ["tail", "-f", "/dev/null"]
-CMD ["./app"]
+CMD ["/opt/todolist/entrypoint.sh"]

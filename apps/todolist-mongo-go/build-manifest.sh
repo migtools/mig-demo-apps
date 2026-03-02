@@ -3,7 +3,7 @@ set -e
 
 # Default manifest name
 if [[ -z $MANIFEST ]]; then
-    MANIFEST="quay.io/migtools/oadp-ci-todolist-mariadb-go-testing:testing"
+    MANIFEST="quay.io/migtools/oadp-ci-todolist-mongo-go:latest"
 fi
 
 # Default platforms: amd64 and arm64
@@ -15,7 +15,7 @@ fi
 # Usage: TTL=2h ./build-manifest.sh
 if [[ -n $TTL ]]; then
     TTL_TAG=$(uuidgen | head -c 8)
-    TTL_MANIFEST="ttl.sh/todolist-mariadb-go-${TTL_TAG}:${TTL}"
+    TTL_MANIFEST="ttl.sh/todolist-mongo-go-${TTL_TAG}:${TTL}"
     echo "Will also push to ttl.sh: $TTL_MANIFEST"
 fi
 

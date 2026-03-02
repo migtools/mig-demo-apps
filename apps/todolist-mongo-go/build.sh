@@ -1,11 +1,10 @@
 #!/bin/bash
 
 VERSION_TAG=latest
-REGISTRY=ttl.sh
+REGISTRY=quay.io
 USER=migtools
 # Manifest name
-MANIFEST_NAME="quay.io/migtools/oadp-ci-todolist-mongo-go-3"
-#MANIFEST_NAME="ttl.sh/oadp-ci-todolist-mongo-go-3"
+MANIFEST_NAME="quay.io/migtools/oadp-ci-todolist-mongo-go-testing"
 
 if [[ -z "${VERSION_TAG:+x}" ]]; then
     echo "Please set up VERSION_TAG variable"
