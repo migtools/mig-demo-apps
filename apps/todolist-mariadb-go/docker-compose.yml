@@ -1,5 +1,5 @@
 version: "3.8"
-services: 
+services:
   mysql:
     image: mariadb:latest
     restart: always
@@ -15,16 +15,24 @@ services:
     networks:
       - mysql
   todolist:
-    image: quay.io/migtools/oadp-ci-todolist-mariadb-go
+    build: .
+    image: todolist-mariadb-go:local
     restart: always
     ports:
       - 8000:8000
     volumes:
       - applog:/tmp/log/todoapp/
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: todolist
+      MYSQL_USER: changeme
+      MYSQL_PASSWORD: changeme
+    depends_on:
+      - mysql
     networks:
       - mysql
 volumes:
-  wpdbvol: {}
+  dbvol: {}
   applog: {}
 networks:
   mysql: {}
