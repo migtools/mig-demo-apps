@@ -1,7 +1,7 @@
-#FQDN=localhost
-#PORT=8000
-FQDN=todolist-route-mysql-persistent.wdh415-vpc-cluster-3626522b15eedb880d7b99992e225c1b-0000.us-south.containers.appdomain.cloud
-PORT=80
+FQDN=localhost
+PORT=8000
+#FQDN=todolist-route-mysql-persistent.wdh415-vpc-cluster-3626522b15eedb880d7b99992e225c1b-0000.us-south.containers.appdomain.cloud
+#PORT=80
 date=$(date "+%F-%T")
 curl -d "description=curl_todo_1_$date&completed=false" -X POST "http://${FQDN}:${PORT}/todo"
 curl -d "description=curl_todo_2_$date&completed=false" -X POST "http://${FQDN}:${PORT}/todo"

@@ -10,6 +10,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -v -a -installsuffix cgo -o app
 # It handles DB initialization automatically via env vars:
 #   MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD, MYSQL_DATABASE
 FROM registry.redhat.io/rhel9/mariadb-1011
+#FROM mariadb
 
 USER root
 

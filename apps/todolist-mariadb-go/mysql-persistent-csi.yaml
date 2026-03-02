@@ -82,7 +82,7 @@ items:
           serviceAccountName: mysql-persistent-sa
           containers:
           - name: todolist
-            image: quay.io/migtools/oadp-ci-todolist-mariadb-go-testing:testing
+            image: ttl.sh/todolist-mariadb-go-7b72d930:3h
             securityContext:
               runAsGroup: 27
               runAsUser: 27
