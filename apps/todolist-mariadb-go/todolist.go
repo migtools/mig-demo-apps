@@ -30,7 +30,6 @@ import (
 	"os"
 	"path"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -44,106 +43,36 @@ import (
 )
 
 var db *gorm.DB
-var dbReady atomic.Bool
 
-// getDSNFromEnv returns user, password, database, host from env with fallbacks.
-func getDSNFromEnv() (user, password, database, host string) {
-	user = os.Getenv("MYSQL_USER")
-	if user == "" {
-		user = "changeme"
+// connectToDB attempts to connect to the local MariaDB instance with retries.
+// Both MariaDB and the Go app run in the same container, so we always connect
+// to 127.0.0.1:3306. Credentials match the MYSQL_USER/MYSQL_PASSWORD env vars
+// set in the Kubernetes manifests and used by the rhel9/mariadb-1011 image.
+func connectToDB() {
+	var err error
+	for i := 0; i < 30; i++ {
+		db, err = connectToMariaDBLocal()
+		if err == nil {
+			log.Info("Successfully connected to MariaDB")
+			return
+		}
+		log.Warnf("Connection attempt %d/30 failed, retrying in 2s...", i+1)
+		time.Sleep(2 * time.Second)
 	}
-	password = os.Getenv("MYSQL_PASSWORD")
-	if password == "" {
-		password = "changeme"
-	}
-	database = os.Getenv("MYSQL_DATABASE")
-	if database == "" {
-		database = "todolist"
-	}
-	host = os.Getenv("MYSQL_HOST")
-	if host == "" {
-		host = "mysql"
-	}
-	return user, password, database, host
+	log.Fatal("Failed to connect to MariaDB after 30 attempts")
 }
 
-// buildDSN builds a MySQL DSN with timeouts (5s connect, 10s read/write).
-func buildDSN(host, user, password, database string) string {
-	return fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?charset=utf8mb4&parseTime=True&loc=Local&timeout=5s&readTimeout=10s&writeTimeout=10s",
-		user, password, host, database)
-}
-
-// connectWithRetry tries to connect to MariaDB with exponential backoff (1s to 30s cap).
-// On success it runs migrations, sets dbReady, and configures the connection pool.
-func connectWithRetry() {
-	user, password, database, host := getDSNFromEnv()
-	remoteDSN := buildDSN(host, user, password, database)
-	localDSN := buildDSN("127.0.0.1", user, password, database)
-
-	backoff := time.Second
-	const maxBackoff = 30 * time.Second
-	attempt := 0
-
-	for {
-		attempt++
-		log.Infof("Database connection attempt %d (remote: %s@tcp(%s:3306)/%s)", attempt, user, host, database)
-
-		var conn *gorm.DB
-		var err error
-		conn, err = gorm.Open(mysql.Open(remoteDSN), &gorm.Config{})
-		if err != nil {
-			log.Warnf("Remote connection failed: %v", err)
-			conn, err = gorm.Open(mysql.Open(localDSN), &gorm.Config{})
-		}
-		if err != nil {
-			log.Warnf("Local connection also failed: %v; retrying in %v", err, backoff)
-			time.Sleep(backoff)
-			if backoff < maxBackoff {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
-			continue
-		}
-
-		sqlDB, err := conn.DB()
-		if err != nil {
-			log.Warnf("Failed to get underlying *sql.DB: %v; retrying in %v", err, backoff)
-			time.Sleep(backoff)
-			continue
-		}
-		if err := sqlDB.Ping(); err != nil {
-			log.Warnf("Ping failed: %v; retrying in %v", err, backoff)
-			sqlDB.Close()
-			time.Sleep(backoff)
-			continue
-		}
-
-		// Configure connection pool
-		sqlDB.SetMaxOpenConns(10)
-		sqlDB.SetMaxIdleConns(5)
-		sqlDB.SetConnMaxLifetime(5 * time.Minute)
-
-		db = conn
-		if err := db.Migrator().CreateTable(&TodoItemModel{}); err != nil {
-			log.Warnf("CreateTable failed (table may already exist): %v", err)
-		}
-		dbReady.Store(true)
-		log.Info("Database connected successfully; dbReady set")
-		return
+// connect to mariadb at 127.0.0.1 (local, same container)
+func connectToMariaDBLocal() (*gorm.DB, error) {
+	log.Info("Attempting to connect to: changeme:changeme@tcp(127.0.0.1:3306)/todolist")
+	dsn := "changeme:changeme@tcp(127.0.0.1:3306)/todolist?charset=utf8mb4&parseTime=True&loc=Local"
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Errorf("Connection failed: %v", err)
+		return nil, err
 	}
-}
 
-// requireDB returns false if the database is not ready and writes 503 to w.
-func requireDB(w http.ResponseWriter) bool {
-	if !dbReady.Load() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		io.WriteString(w, `{"error": "database not available"}`)
-		return false
-	}
-	return true
+	return db, nil
 }
 
 type TodoItemModel struct {
@@ -153,9 +82,6 @@ type TodoItemModel struct {
 }
 
 func CreateItem(w http.ResponseWriter, r *http.Request) {
-	if !requireDB(w) {
-		return
-	}
 	description := r.FormValue("description")
 	log.WithFields(log.Fields{"description": description}).Info("Add new TodoItem. Saving to database.")
 	todo := &TodoItemModel{Description: description, Completed: false}
@@ -171,9 +97,6 @@ func CreateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateItem(w http.ResponseWriter, r *http.Request) {
-	if !requireDB(w) {
-		return
-	}
 	// Get URL parameter from mux
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
@@ -197,9 +120,6 @@ func UpdateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteItem(w http.ResponseWriter, r *http.Request) {
-	if !requireDB(w) {
-		return
-	}
 	// Get URL parameter from mux
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
@@ -231,9 +151,6 @@ func GetItemByID(Id int) bool {
 }
 
 func GetCompletedItems(w http.ResponseWriter, r *http.Request) {
-	if !requireDB(w) {
-		return
-	}
 	log.Info("Get completed TodoItems")
 	completedTodoItems := GetTodoItems(true)
 	w.Header().Set("Content-Type", "application/json")
@@ -241,9 +158,6 @@ func GetCompletedItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetIncompleteItems(w http.ResponseWriter, r *http.Request) {
-	if !requireDB(w) {
-		return
-	}
 	log.Info("Get Incomplete TodoItems")
 	IncompleteTodoItems := GetTodoItems(false)
 	w.Header().Set("Content-Type", "application/json")
@@ -260,12 +174,6 @@ func GetTodoItems(completed bool) interface{} {
 }
 
 func Healthz(w http.ResponseWriter, r *http.Request) {
-	if !dbReady.Load() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		io.WriteString(w, `{"alive": true, "database": "connecting"}`)
-		return
-	}
 	log.Info("API Health is OK")
 	w.Header().Set("Content-Type", "application/json")
 	io.WriteString(w, `{"alive": true}`)
@@ -282,6 +190,13 @@ func Home(w http.ResponseWriter, r *http.Request) {
 func init() {
 	log.SetFormatter(&log.TextFormatter{})
 	log.SetReportCaller(true)
+}
+
+func prepopulate() {
+	log.Info("Prepopulate the db")
+	db.Create(&TodoItemModel{Description: "time to make the donuts"})
+	db.Create(&TodoItemModel{Description: "prepopulate the db", Completed: true})
+
 }
 
 func GetLogFile(w http.ResponseWriter, r *http.Request) {
@@ -312,8 +227,8 @@ func main() {
 		logrus.Info("Success: Attached volume and redirected logs to /tmp/log/todoapp/app.log")
 	}
 
-	go connectWithRetry()
-
+	connectToDB()
+	db.Migrator().CreateTable(&TodoItemModel{})
 	fs := http.FileServer(http.Dir("./resources/"))
 
 	log.Info("Starting Todolist API server")
