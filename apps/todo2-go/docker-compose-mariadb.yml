@@ -1,0 +1,33 @@
+version: "3.8"
+# Single-container model: MariaDB + Go app run inside the same container,
+# started by entrypoint.sh.  No MYSQL_HOST is set, so the entrypoint
+# initialises a local MariaDB and then exec's the app.
+services:
+  todolist:
+    build:
+      context: .
+      dockerfile: Dockerfile.mariadb
+    image: todo2-go-mariadb:local   # quay: oadp-ci-todo2-go-testing-mariadb
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - dbvol:/var/lib/mysql/data
+      - applog:/tmp/log/todoapp/
+    environment:
+      DB_BACKEND: mariadb
+      MYSQL_USER: changeme
+      MYSQL_PASSWORD: changeme
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: todolist
+      # MYSQL_HOST is intentionally absent — entrypoint starts local MariaDB
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  dbvol: {}
+  applog: {}
