@@ -73,10 +73,11 @@ if [ "$DB_BACKEND" = "mariadb" ]; then
         echo "Wrote DB backend marker to PV: $MARIADB_MARKER"
     fi
 
-    # Point MariaDB data directory at the PV mount so data persists.
-    # The official entrypoint honours MARIADB_DATA_DIR / MYSQL_DATADIR.
-    export MARIADB_DATA_DIR="${MARIADB_DATA_DIR:-/var/lib/mysql/data}"
-    export MYSQL_DATADIR="${MARIADB_DATA_DIR}"
+    # Pass --datadir explicitly so MariaDB writes to the PVC-mounted path.
+    # MARIADB_DATA_DIR / MYSQL_DATADIR env vars are NOT honoured by the
+    # official docker-entrypoint.sh; only the --datadir flag works.
+    DATADIR_ARG="--datadir=/var/lib/mysql/data"
+    echo "MariaDB datadir set to: /var/lib/mysql/data"
 
     # Delegate all DB initialisation to the official mariadb Docker entrypoint.
     # It reads MYSQL_ROOT_PASSWORD, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
@@ -84,13 +85,13 @@ if [ "$DB_BACKEND" = "mariadb" ]; then
     # Try candidates in order: RHEL (run-mysqld), then upstream mariadb image.
     DB_PID=""
     for candidate in \
-        "run-mysqld" \
-        "/usr/local/bin/docker-entrypoint.sh mariadbd" \
-        "/usr/local/bin/docker-entrypoint.sh mysqld" \
-        "/docker-entrypoint.sh mariadbd" \
-        "/docker-entrypoint.sh mysqld" \
-        "mariadbd --user=$(id -u)" \
-        "mysqld --user=$(id -u)"; do
+        "run-mysqld $DATADIR_ARG" \
+        "/usr/local/bin/docker-entrypoint.sh mariadbd $DATADIR_ARG" \
+        "/usr/local/bin/docker-entrypoint.sh mysqld $DATADIR_ARG" \
+        "/docker-entrypoint.sh mariadbd $DATADIR_ARG" \
+        "/docker-entrypoint.sh mysqld $DATADIR_ARG" \
+        "mariadbd --user=$(id -u) $DATADIR_ARG" \
+        "mysqld --user=$(id -u) $DATADIR_ARG"; do
         first="${candidate%% *}"
         if [[ "$first" == /* ]]; then
             [[ -x "$first" ]] || continue

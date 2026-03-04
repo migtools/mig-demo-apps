@@ -45,6 +45,7 @@ build_and_push() {
         image_list="$image_list $IMAGE"
     done
     echo "Creating manifest $manifest_name from: $image_list"
+    podman manifest rm "$manifest_name" 2>/dev/null || true
     podman manifest create "$manifest_name" $image_list
     podman manifest push "$manifest_name"
 }
