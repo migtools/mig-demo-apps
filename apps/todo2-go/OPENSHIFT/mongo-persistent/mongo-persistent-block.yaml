@@ -78,18 +78,21 @@ items:
           securityContext:
             runAsUser: 0
           # Format the block device on first use so MongoDB can use the filesystem
+          # Use same app image; install e2fsprogs then format (mongo:7 base has apt)
           initContainers:
             - image: quay.io/migtools/oadp-ci-todo2-go-testing-mongodb:latest
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               securityContext:
                 privileged: true
               name: setup-block-device
               command:
-                - "sh"
+                - "bash"
                 - "-c"
                 - |
+                  set -e
+                  apt-get update -qq && apt-get install -y -qq e2fsprogs
                   DEVICE="/dev/xvdx"
-                  MOUNT_POINT="/data/db"
+                  MOUNT_POINT="/var/lib/mongodb"
                   if [ ! -e $DEVICE ]; then
                     echo "$DEVICE does not exist."
                     exit 1
@@ -117,8 +120,6 @@ items:
             env:
               - name: DB_BACKEND
                 value: mongodb
-              - name: MONGO_DATABASE
-                value: todolist
               - name: MONGO_INITDB_ROOT_USERNAME
                 value: changeme
               - name: MONGO_INITDB_ROOT_PASSWORD
@@ -131,16 +132,16 @@ items:
             resources:
               limits:
                 memory: 512Mi
-            # Block mode: mount the block device and use it for /data/db
+            # Block mode: mount the block device and use it for /var/lib/mongodb
             command:
               - "sh"
               - "-c"
-                - |
-                  DEVICE="/dev/xvdx"
-                  MOUNT_POINT="/var/lib/mongodb"
-                  mkdir -p $MOUNT_POINT
-                  mount $DEVICE $MOUNT_POINT
-                  exec /opt/todolist/entrypoint.sh
+              - |
+                DEVICE="/dev/xvdx"
+                MOUNT_POINT="/var/lib/mongodb"
+                mkdir -p $MOUNT_POINT
+                mount $DEVICE $MOUNT_POINT
+                exec /opt/todolist/entrypoint.sh
             volumeDevices:
               - name: block-volume-pv
                 devicePath: /dev/xvdx
@@ -161,7 +162,7 @@ items:
               periodSeconds: 10
             readinessProbe:
               httpGet:
-                path: /healthz
+                path: /readyz
                 port: 8000
               initialDelaySeconds: 10
               periodSeconds: 5
