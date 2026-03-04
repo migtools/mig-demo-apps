@@ -123,7 +123,7 @@ loop:
 
 This means:
 - The HTTP server (and liveness probe `/healthz`) is available immediately.
-- The readiness probe (`/readyz`) returns 503 until the DB is reachable.
+- `/readyz` returns 503 until `store.Ping()` succeeds (DB is actually reachable).
 - OpenShift's `startupProbe` on `/healthz` allows the container to be marked live while waiting for DB init, which can take over a minute on first boot.
 
 ---
@@ -163,23 +163,28 @@ Both `Dockerfile.mariadb` and `Dockerfile.mongodb` use a two-stage build:
 
 ### Permissions and arbitrary UID
 
-OpenShift assigns a random UID from a namespace-specific range. The container must be writable by that UID. The pattern used is:
+OpenShift assigns a random UID from a namespace-specific range. The container must be writable by that UID. The pattern used in the Dockerfile is:
 
 ```dockerfile
 RUN chown -R 1001:0 /opt/todolist /var/lib/mysql /tmp/log/todoapp && \
     chmod -R g=u    /opt/todolist /var/lib/mysql /tmp/log/todoapp
 ```
 
-`chmod g=u` (group permissions equal user permissions) ensures that any process running as any UID in group 0 (GID 0, always granted by OpenShift) can read and write the same paths as the owner. The OpenShift deployment sets `fsGroup: 1001` so mounted PVC directories inherit GID 1001.
+`chmod g=u` (group permissions equal user permissions) ensures that any process running as any UID in group 0 (GID 0, always granted by OpenShift) can read and write the same paths as the owner.
 
-At runtime, `entrypoint.sh` re-applies `chown -R "$(id -u):0"` on the data directories before starting the database, so volume-mounted paths are writable by the injected UID regardless of what the Dockerfile pre-set.
+At runtime, `entrypoint.sh` re-applies `chown -R "$(id -u):0"` on the data directories before starting the database, so volume-mounted PVC paths are writable by the injected UID regardless of what the Dockerfile pre-set.
 
 ---
 
 ## entrypoint.sh Logic
 
 ```
-DB_BACKEND (default: mariadb)
+# Step 1 — Determine DB_BACKEND (in priority order):
+#   1. DB_BACKEND env var (highest precedence)
+#   2. .db_backend marker file on the PV
+#      - MariaDB: /var/lib/mysql/data/.db_backend
+#      - MongoDB: /var/lib/mongodb/.db_backend
+#   3. Default: mariadb
 
 if MYSQL_HOST is external (non-localhost) [mariadb mode]:
     exec ./app   ← skip local DB
@@ -189,9 +194,12 @@ if MONGO_URI points to external host [mongodb mode]:
 
 # All-in-one mode:
 fix permissions on data dir (chown + chmod g=u)
+write .db_backend marker to PV (first startup only)
 
 if mariadb:
-    find and run official docker-entrypoint.sh or mariadbd
+    set DATADIR_ARG="--datadir=/var/lib/mysql/data"
+    find and run: docker-entrypoint.sh mariadbd $DATADIR_ARG
+                  (or mariadbd --user=<uid> $DATADIR_ARG as fallback)
     poll: mariadb -u <user> -p <pass> <db> -e "SELECT 1"
     → wait up to 120s for app user connectivity
 
@@ -204,9 +212,16 @@ exec /opt/todolist/app
 ```
 
 Key implementation notes:
-- MariaDB startup delegates to the official `docker-entrypoint.sh` so that user/database creation from `MYSQL_*` env vars is handled correctly without duplicating that logic.
-- The MariaDB readiness check verifies the *application user* can connect (not just root), ensuring the Go app can immediately query the DB after `exec`.
-- The MongoDB readiness check uses the `mongosh` exit code rather than parsing output, because `mongosh` changed its output format in version 6+.
+
+- **DB_BACKEND marker file**: On first startup, `entrypoint.sh` writes the detected backend name to a hidden file inside the data directory on the PV (`.db_backend`). On subsequent starts (including after a Velero restore), if `DB_BACKEND` is not set in the environment, the entrypoint reads this file to determine the correct backend. This makes the deployment resilient to restores where the env var was not captured in the backup.
+
+- **MariaDB `--datadir` flag**: The official MariaDB `docker-entrypoint.sh` does **not** honour the `MARIADB_DATA_DIR` or `MYSQL_DATADIR` environment variables for changing the data directory. The `--datadir` CLI flag must be passed directly to `mariadbd`. Without this, MariaDB writes all data to `/var/lib/mysql` (the compiled-in default, which is ephemeral container storage), and data is lost on pod restart.
+
+- **MariaDB startup delegation**: Startup delegates to the official `docker-entrypoint.sh` so that user/database creation from `MYSQL_*` env vars is handled correctly without duplicating that logic. A candidate list of known entrypoint paths is tried in order (RHEL `run-mysqld` first, then upstream image paths).
+
+- **MariaDB readiness check**: Verifies the *application user* can connect (not just root), ensuring the Go app can immediately query the DB after `exec`.
+
+- **MongoDB readiness check**: Uses the `mongosh` exit code rather than parsing output, because `mongosh` changed its output format in version 6+ (removing quotes from `{ ok: 1 }`).
 
 ---
 
@@ -216,26 +231,72 @@ Key implementation notes:
 
 Each namespace gets a custom SCC (`mongo-persistent-scc` / `mysql-persistent-scc`) with `RunAsAny` for `runAsUser`, `fsGroup`, and `supplementalGroups`. This allows the container to run as any UID and ensures the PVC is group-writable.
 
-The SCC is bound to the namespace's `ServiceAccount` via both:
-1. The `users` field on the SCC (legacy method, kept for compatibility).
-2. A `ClusterRole` + `ClusterRoleBinding` granting `use` on the SCC (the recommended OCP 4.x method).
+The SCC grants access to the namespace's `ServiceAccount` via the `users` field on the SCC object:
+
+```yaml
+users:
+- system:admin
+- system:serviceaccount:mysql-persistent:mysql-persistent-sa
+```
 
 ### Probes
 
-| Probe          | Endpoint  | Rationale                                                                  |
-|----------------|-----------|----------------------------------------------------------------------------|
-| `startupProbe` | `/healthz` | App is live immediately; `failureThreshold: 60` allows ~5min for DB init  |
-| `livenessProbe`| `/healthz` | Detects Go process hang                                                    |
-| `readinessProbe`| `/readyz` | Returns 503 until `store.Ping()` succeeds; prevents traffic before DB ready|
+All three probes use `/healthz`. The `/readyz` endpoint is available for manual health checks (it pings the DB and returns 503 until connected) but is not used by the Kubernetes probe configuration — doing so would cause the pod to be restarted during normal DB initialisation.
+
+| Probe           | Endpoint  | Rationale                                                                    |
+|-----------------|-----------|------------------------------------------------------------------------------|
+| `startupProbe`  | `/healthz` | App is live immediately; `failureThreshold: 60` allows ~5 min for DB init  |
+| `livenessProbe` | `/healthz` | Detects Go process hang                                                      |
+| `readinessProbe`| `/healthz` | Prevents traffic before the Go app is fully up; DB readiness is enforced by `startupProbe` timeout |
 
 ### Volume mounts
 
-| Backend  | Mount path            | PVC claim    |
-|----------|-----------------------|--------------|
-| MariaDB  | `/var/lib/mysql/data` | `mysql-data` |
-| MongoDB  | `/var/lib/mongodb`    | `mongo`      |
+| Backend  | Volume name  | Mount path            | PVC claim name |
+|----------|--------------|-----------------------|----------------|
+| MariaDB  | `mysql-data` | `/var/lib/mysql/data` | `mysql`        |
+| MongoDB  | `mongo-data` | `/var/lib/mongodb`    | `mongo`        |
 
-These are the paths where the respective databases store their data files by default. Velero snapshots these PVCs to validate data persistence across backup/restore cycles.
+MariaDB data is stored at `/var/lib/mysql/data` (not the compiled-in default of `/var/lib/mysql`) so that the PVC is mounted directly at the datadir. The `--datadir` flag passed to `mariadbd` in `entrypoint.sh` enforces this.
+
+---
+
+## Velero / OADP Data Persistence
+
+This section is critical — without the correct configuration Velero will back up the PVC *object* only, not its contents, and data will be lost after restore.
+
+### Kopia file-system backup (recommended for KOPIA backup type)
+
+Add the following annotation to the pod template in the Deployment so the Velero NodeAgent (Kopia) backs up the named volume:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        backup.velero.io/backup-volumes: mysql-data   # or mongo-data
+```
+
+This annotation is already present in all manifests under `OPENSHIFT/mysql-persistent/` and `OPENSHIFT/mongo-persistent/`.
+
+### CSI snapshot backup (for CSI backup type)
+
+The VolumeSnapshotClass used by the storage class must carry the Velero label:
+
+```bash
+oc label volumesnapshotclass <name> velero.io/csi-volumesnapshot-class=true
+```
+
+On AWS with EBS CSI:
+
+```bash
+oc label volumesnapshotclass csi-aws-vsc velero.io/csi-volumesnapshot-class=true
+```
+
+Without this label, Velero's CSI plugin will not take a VolumeSnapshot during backup.
+
+### Restore behaviour
+
+When using Kopia, Velero injects a `restore-wait` init container into the restored pod. This init container restores the PV data before the main container (and therefore the database) starts. MariaDB's `docker-entrypoint.sh` detects the existing datadir (`mysql` system database present) and skips re-initialization, preserving all backed-up rows.
 
 ---
 
