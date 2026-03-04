@@ -98,7 +98,10 @@ func main() {
 		AllowedMethods: []string{"GET", "POST", "DELETE", "PATCH", "OPTIONS"},
 	}).Handler(router)
 
-	srv := &http.Server{Addr: ":" + port, Handler: handler}
+	// Bind explicitly to 0.0.0.0 (IPv4) so kubelet probes via the pod's
+	// IPv4 address reach the server. ":port" alone binds IPv6-only on some
+	// container runtimes, causing liveness/startup probe timeouts.
+	srv := &http.Server{Addr: "0.0.0.0:" + port, Handler: handler}
 	go func() {
 		logrus.Infof("Starting Todolist API server on :%s", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -2,7 +2,30 @@
 set -e
 
 CDIR="/opt/todolist"
-DB_BACKEND="${DB_BACKEND:-mariadb}"
+
+# -----------------------------------------------------------------------
+# DB backend auto-detection order:
+#   1. DB_BACKEND env var (highest precedence)
+#   2. Marker file on the PV written at first startup (.db_backend)
+#   3. Default: mariadb
+# This ensures the correct backend is used after a Velero restore even if
+# the env var was not captured in the backup.
+# -----------------------------------------------------------------------
+MARIADB_MARKER="/var/lib/mysql/data/.db_backend"
+MONGODB_MARKER="/var/lib/mongodb/.db_backend"
+
+if [ -z "$DB_BACKEND" ]; then
+    if [ -f "$MARIADB_MARKER" ]; then
+        DB_BACKEND=$(cat "$MARIADB_MARKER")
+        echo "DB_BACKEND auto-detected from PV marker: $DB_BACKEND"
+    elif [ -f "$MONGODB_MARKER" ]; then
+        DB_BACKEND=$(cat "$MONGODB_MARKER")
+        echo "DB_BACKEND auto-detected from PV marker: $DB_BACKEND"
+    else
+        DB_BACKEND="mariadb"
+        echo "DB_BACKEND not set and no PV marker found, defaulting to: $DB_BACKEND"
+    fi
+fi
 
 # -----------------------------------------------------------------------
 # Determine whether to start a local DB or use an external one.
@@ -41,8 +64,19 @@ fi
 if [ "$DB_BACKEND" = "mariadb" ]; then
     # Fix volume permissions (Docker creates volumes as root:root)
     mkdir -p /var/lib/mysql/data /tmp/log/todoapp
-    chown -R "$(id -u):0" /var/lib/mysql /tmp/log/todoapp 2>/dev/null || true
-    chmod -R g=u /var/lib/mysql /tmp/log/todoapp 2>/dev/null || true
+    chown -R "$(id -u):0" /var/lib/mysql/data /tmp/log/todoapp 2>/dev/null || true
+    chmod -R g=u /var/lib/mysql/data /tmp/log/todoapp 2>/dev/null || true
+
+    # Write DB backend marker to PV on first startup so it survives restore.
+    if [ ! -f "$MARIADB_MARKER" ]; then
+        echo -n "mariadb" > "$MARIADB_MARKER"
+        echo "Wrote DB backend marker to PV: $MARIADB_MARKER"
+    fi
+
+    # Point MariaDB data directory at the PV mount so data persists.
+    # The official entrypoint honours MARIADB_DATA_DIR / MYSQL_DATADIR.
+    export MARIADB_DATA_DIR="${MARIADB_DATA_DIR:-/var/lib/mysql/data}"
+    export MYSQL_DATADIR="${MARIADB_DATA_DIR}"
 
     # Delegate all DB initialisation to the official mariadb Docker entrypoint.
     # It reads MYSQL_ROOT_PASSWORD, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
@@ -104,6 +138,13 @@ elif [ "$DB_BACKEND" = "mongodb" ]; then
     mkdir -p /var/lib/mongodb /tmp/log/todoapp
     chown -R "$(id -u):0" /var/lib/mongodb /tmp/log/todoapp 2>/dev/null || true
     chmod -R g=u /var/lib/mongodb /tmp/log/todoapp 2>/dev/null || true
+
+    # Write DB backend marker to PV on first startup so it survives restore.
+    if [ ! -f "$MONGODB_MARKER" ]; then
+        echo -n "mongodb" > "$MONGODB_MARKER"
+        echo "Wrote DB backend marker to PV: $MONGODB_MARKER"
+    fi
+
     LOGPATH="/tmp/log/todoapp/mongod.log"
 
     echo "Starting MongoDB..."
