@@ -29,7 +29,12 @@ items:
     supplementalGroups:
       type: RunAsAny
     volumes:
-    - '*'
+    - persistentVolumeClaim
+    - secret
+    - configMap
+    - downwardAPI
+    - projected
+    - emptyDir
     users:
     - system:admin
     - system:serviceaccount:mongo-persistent:mongo-persistent-sa
@@ -91,7 +96,7 @@ items:
                 - |
                   set -e
                   apt-get update -qq && apt-get install -y -qq e2fsprogs
-                  DEVICE="/dev/xvdx"
+                  DEVICE="/dev/block-pv"
                   MOUNT_POINT="/var/lib/mongodb"
                   if [ ! -e $DEVICE ]; then
                     echo "$DEVICE does not exist."
@@ -111,7 +116,7 @@ items:
                   umount $MOUNT_POINT
               volumeDevices:
                 - name: block-volume-pv
-                  devicePath: /dev/xvdx
+                  devicePath: /dev/block-pv
           containers:
           - name: todolist
             image: quay.io/migtools/oadp-ci-todo2-go-testing-mongodb:latest
@@ -120,11 +125,7 @@ items:
             env:
               - name: DB_BACKEND
                 value: mongodb
-              - name: MONGO_INITDB_ROOT_USERNAME
-                value: changeme
-              - name: MONGO_INITDB_ROOT_PASSWORD
-                value: changeme
-              - name: MONGO_INITDB_DATABASE
+              - name: MONGO_DATABASE
                 value: todolist
             ports:
               - containerPort: 8000
@@ -137,14 +138,14 @@ items:
               - "sh"
               - "-c"
               - |
-                DEVICE="/dev/xvdx"
+                DEVICE="/dev/block-pv"
                 MOUNT_POINT="/var/lib/mongodb"
                 mkdir -p $MOUNT_POINT
                 mount $DEVICE $MOUNT_POINT
                 exec /opt/todolist/entrypoint.sh
             volumeDevices:
               - name: block-volume-pv
-                devicePath: /dev/xvdx
+                devicePath: /dev/block-pv
             startupProbe:
               httpGet:
                 path: /healthz

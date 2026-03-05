@@ -55,7 +55,8 @@ func TestMariaDBStore_Integration(t *testing.T) {
 
 	err = s.Update(ctx, item.ID, true)
 	require.NoError(t, err)
-	got, _ = s.GetByID(ctx, item.ID)
+	got, err = s.GetByID(ctx, item.ID)
+	require.NoError(t, err)
 	assert.True(t, got.Completed)
 
 	err = s.Delete(ctx, item.ID)

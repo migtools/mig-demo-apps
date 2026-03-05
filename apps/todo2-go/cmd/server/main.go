@@ -115,5 +115,7 @@ func main() {
 	logrus.Info("Shutting down")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	_ = srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logrus.Errorf("Server shutdown error: %v", err)
+	}
 }
