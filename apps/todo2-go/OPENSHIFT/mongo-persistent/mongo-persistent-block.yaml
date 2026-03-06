@@ -1,0 +1,183 @@
+apiVersion: v1
+kind: List
+items:
+  - kind: Namespace
+    apiVersion: v1
+    metadata:
+      name: mongo-persistent
+      labels:
+        app: todolist-mongo-go
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: mongo-persistent-sa
+      namespace: mongo-persistent
+      labels:
+        component: mongo-persistent
+  - kind: SecurityContextConstraints
+    apiVersion: security.openshift.io/v1
+    metadata:
+      name: mongo-persistent-scc
+    allowPrivilegeEscalation: true
+    allowPrivilegedContainer: true
+    runAsUser:
+      type: RunAsAny
+    seLinuxContext:
+      type: RunAsAny
+    fsGroup:
+      type: RunAsAny
+    supplementalGroups:
+      type: RunAsAny
+    volumes:
+    - persistentVolumeClaim
+    - secret
+    - configMap
+    - downwardAPI
+    - projected
+    - emptyDir
+    users:
+    - system:admin
+    - system:serviceaccount:mongo-persistent:mongo-persistent-sa
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: todolist
+      namespace: mongo-persistent
+      labels:
+        app: todolist
+        service: todolist
+        e2e-app: "true"
+    spec:
+      ports:
+        - name: web
+          port: 8000
+          targetPort: 8000
+      selector:
+        app: todolist
+        service: todolist
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: todolist
+      namespace: mongo-persistent
+      labels:
+        app: todolist
+        service: todolist
+        e2e-app: "true"
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: todolist
+          service: todolist
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            app: todolist
+            service: todolist
+            e2e-app: "true"
+        spec:
+          serviceAccountName: mongo-persistent-sa
+          securityContext:
+            runAsUser: 0
+          # Format the block device on first use so MongoDB can use the filesystem
+          # Use same app image; install e2fsprogs then format (mongo:7 base has apt)
+          initContainers:
+            - image: quay.io/migtools/oadp-ci-todo2-go-testing-mongodb:latest
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                privileged: true
+              name: setup-block-device
+              command:
+                - "bash"
+                - "-c"
+                - |
+                  set -e
+                  apt-get update -qq && apt-get install -y -qq e2fsprogs
+                  DEVICE="/dev/block-pv"
+                  MOUNT_POINT="/var/lib/mongodb"
+                  if [ ! -e $DEVICE ]; then
+                    echo "$DEVICE does not exist."
+                    exit 1
+                  fi
+                  if dumpe2fs -h $DEVICE 2>/dev/null; then
+                    echo "Filesystem already exists on $DEVICE"
+                  else
+                    echo "Formatting $DEVICE"
+                    mkfs.ext4 $DEVICE
+                  fi
+                  mkdir -p $MOUNT_POINT
+                  echo "Mounting $DEVICE in the $MOUNT_POINT"
+                  mount $DEVICE $MOUNT_POINT
+                  echo $(date +%s) > $MOUNT_POINT/format_timestamp
+                  echo "Recorded timestamp: $(cat $MOUNT_POINT/format_timestamp)"
+                  umount $MOUNT_POINT
+              volumeDevices:
+                - name: block-volume-pv
+                  devicePath: /dev/block-pv
+          containers:
+          - name: todolist
+            image: quay.io/migtools/oadp-ci-todo2-go-testing-mongodb:latest
+            securityContext:
+              privileged: true
+            env:
+              - name: DB_BACKEND
+                value: mongodb
+              - name: MONGO_DATABASE
+                value: todolist
+            ports:
+              - containerPort: 8000
+                protocol: TCP
+            resources:
+              limits:
+                memory: 512Mi
+            # Block mode: mount the block device and use it for /var/lib/mongodb
+            command:
+              - "sh"
+              - "-c"
+              - |
+                DEVICE="/dev/block-pv"
+                MOUNT_POINT="/var/lib/mongodb"
+                mkdir -p $MOUNT_POINT
+                mount $DEVICE $MOUNT_POINT
+                exec /opt/todolist/entrypoint.sh
+            volumeDevices:
+              - name: block-volume-pv
+                devicePath: /dev/block-pv
+            startupProbe:
+              httpGet:
+                path: /healthz
+                port: 8000
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              timeoutSeconds: 10
+              successThreshold: 1
+              failureThreshold: 60
+            livenessProbe:
+              httpGet:
+                path: /healthz
+                port: 8000
+              initialDelaySeconds: 30
+              periodSeconds: 10
+            readinessProbe:
+              httpGet:
+                path: /readyz
+                port: 8000
+              initialDelaySeconds: 10
+              periodSeconds: 5
+          volumes:
+          - name: block-volume-pv
+            persistentVolumeClaim:
+              claimName: mongo
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: todolist-route
+      namespace: mongo-persistent
+    spec:
+      path: "/"
+      to:
+        kind: Service
+        name: todolist

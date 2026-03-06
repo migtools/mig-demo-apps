@@ -1,0 +1,30 @@
+version: "3.8"
+# Single-container model: MongoDB + Go app run inside the same container,
+# started by entrypoint.sh.  No MONGO_URI is set, so the entrypoint
+# starts a local mongod (--noauth) and then exec's the app.
+services:
+  todolist:
+    build:
+      context: .
+      dockerfile: Dockerfile.mongodb
+    image: todo2-go-mongodb:local
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - mongodbvol:/var/lib/mongodb
+      - applog:/tmp/log/todoapp/
+    environment:
+      DB_BACKEND: mongodb
+      MONGO_DATABASE: todolist
+      # MONGO_URI is intentionally absent — entrypoint starts local mongod
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  mongodbvol: {}
+  applog: {}
